@@ -1,1 +1,1 @@
-A simple web scraper script written in Go that extracts sums the tour points for my fantasy disc golf team.
+A simple web scraper script written in Go that extracts and sums the tour points for my fantasy disc golf team.
