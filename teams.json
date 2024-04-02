@@ -1,0 +1,27 @@
+{
+    "Chase": {
+        "mpo": ["Isaac Robinson", "James Proctor", "Corey Ellis", "James Conrad", "Väinö Mäkelä", "Paul Krans"],
+        "fpo": ["Holyn Handley", "Hailey King", "Jessica Weese"]
+    },
+    "Akhil": {
+        "mpo":["Paul McBeth", "Alden Harris", "Chris Dickerson", "Bradley Williams", "Benjamin Callaway", "Evan Smith"],
+        "fpo": ["Kristin Tattar", "Paige Pierce", "Ali Smith"]
+    },
+    "Dustin": {
+        "mpo": ["Ricky Wysocki", "Eagle McMahon", "Matt Orum", "Kevin Jones", "Drew Gibson", "Nikko Locastro"],
+        "fpo": ["Ohn Scoggins", "Jennifer Allen", "Valerie Mandujano"]
+    },
+    "Sean": {
+        "mpo": ["Gannon Buhr", "Kyle Klein", "Aaron Gossage", "Niklas Anttila", "Robert Burridge", "Garrett Gurthie"],
+        "fpo": ["Missy Gannon", "Eveliina Salonen", "Sai Ananda"]
+    },
+    "Nate": {
+        "mpo": ["Calvin Heimburg", "Anthony Barela", "Adam Hammes", "Joel Freeman", "Andrew Marwede", "Jakub Semerad"],
+        "fpo": ["Kat Mertsch", "Ella Hansen", "Sarah Hokom"]
+    },
+    "John": {
+        "mpo": ["Simon Lizotte", "Cole Redalen", "Ezra Aderhold", "Ezra Robinson", "Chris Clemons", "Emerson Keith"],
+        "fpo": ["Catrina Allen", "Henna Blomroos", "Stacie Rawnsley"]
+    }
+
+}
