@@ -16,30 +16,23 @@ var mpoURL string = "https://statmando.com/rankings/dgpt/mpo"
 var fpoURL string = "https://statmando.com/rankings/dgpt/fpo"
 
 func main() {
-	teamsFromJSON := readJsonToLeagueTeams()
-	allMPOPlayers, allFPOPlayers := createAllPlayersLists(teamsFromJSON)
+	teamsFromFile := readFileToLeagueTeams("teams.json")
+	allMPOPlayers, allFPOPlayers := collectAllPlayersByDivision(teamsFromFile)
 
 	scraper := colly.NewCollector()
 	scrapeAllPlayerPoints(allMPOPlayers, mpoURL, scraper)
 	scrapeAllPlayerPoints(allFPOPlayers, fpoURL, scraper)
 
-	var teams []Team
-	for teamOwner := range teamsFromJSON {
-		var team Team
-		team.Owner = teamOwner
-		teams = append(teams, team)
-	}
-	addPlayersToTeams(teams, allMPOPlayers, "mpo")
-	addPlayersToTeams(teams, allFPOPlayers, "fpo")
+	league := createLeague(teamsFromFile)
+	distroPlayersToTeams(league, allMPOPlayers, "mpo")
+	distroPlayersToTeams(league, allFPOPlayers, "fpo")
 
-	for i := range teams {
-		teams[i].sortRostersByPoints()
-		teams[i].sumTopPlayersPoints()
+	for i := range league {
+		league[i].sortRostersByPoints()
+		league[i].sumTopPlayersPoints()
 	}
-	orderTeamsByPoints(teams)
-	for i, team := range teams {
-		fmt.Printf("%v. %v: %v", i+1, team.Owner, team.Points)
-	}
+	orderTeamsByPoints(league)
+	displayStandings(league)
 }
 
 type LeagueTeams map[string]struct {
@@ -80,8 +73,8 @@ type Player struct {
 	Owner  string
 }
 
-func readJsonToLeagueTeams() LeagueTeams {
-	playerLists, err := os.ReadFile("teams.json")
+func readFileToLeagueTeams(file string) LeagueTeams {
+	playerLists, err := os.ReadFile(file)
 	if err != nil {
 		log.Fatal("Could not read file: ", err)
 	}
@@ -93,7 +86,7 @@ func readJsonToLeagueTeams() LeagueTeams {
 	return teams
 }
 
-func createAllPlayersLists(leagueTeams LeagueTeams) ([]Player, []Player) {
+func collectAllPlayersByDivision(leagueTeams LeagueTeams) ([]Player, []Player) {
 	var allMPOPlayers []Player
 	var allFPOPlayers []Player
 	for owner, team := range leagueTeams {
@@ -139,7 +132,17 @@ func scrapeAllPlayerPoints(players []Player, url string, scraper *colly.Collecto
 	scraper.Visit(url)
 }
 
-func addPlayersToTeams(teams []Team, players []Player, division string) {
+func createLeague(leagueTeams LeagueTeams) []Team {
+	var league []Team
+	for teamOwner := range leagueTeams {
+		var team Team
+		team.Owner = teamOwner
+		league = append(league, team)
+	}
+	return league
+}
+
+func distroPlayersToTeams(teams []Team, players []Player, division string) {
 	for i, player := range players {
 		for j, team := range teams {
 			if team.Owner == player.Owner {
@@ -157,4 +160,10 @@ func orderTeamsByPoints(teams []Team) {
 	sort.Slice(teams, func(i, j int) bool {
 		return teams[i].Points > teams[j].Points
 	})
+}
+
+func displayStandings(teams []Team) {
+	for i, team := range teams {
+		fmt.Printf("%v. %v: %v", i+1, team.Owner, team.Points)
+	}
 }
