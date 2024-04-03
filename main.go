@@ -8,126 +8,111 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gocolly/colly"
 )
 
-type FantasyTeams map[string]struct {
+var mpoURL string = "https://statmando.com/rankings/dgpt/mpo"
+var fpoURL string = "https://statmando.com/rankings/dgpt/fpo"
+
+func main() {
+	teamsFromJSON := readJsonToLeagueTeams()
+	allMPOPlayers, allFPOPlayers := createAllPlayersLists(teamsFromJSON)
+
+	scraper := colly.NewCollector()
+	scrapeAllPlayerPoints(allMPOPlayers, mpoURL, scraper)
+	scrapeAllPlayerPoints(allFPOPlayers, fpoURL, scraper)
+
+	var teams []Team
+	for teamOwner := range teamsFromJSON {
+		var team Team
+		team.Owner = teamOwner
+		teams = append(teams, team)
+	}
+	addPlayersToTeams(teams, allMPOPlayers, "mpo")
+	addPlayersToTeams(teams, allFPOPlayers, "fpo")
+
+	for i := range teams {
+		teams[i].sortRostersByPoints()
+		teams[i].sumTopPlayersPoints()
+	}
+	orderTeamsByPoints(teams)
+	for i, team := range teams {
+		fmt.Printf("%v. %v: %v", i+1, team.Owner, team.Points)
+	}
+}
+
+type LeagueTeams map[string]struct {
 	MPO []string `json:"mpo"`
 	FPO []string `json:"fpo"`
 }
 
 type Team struct {
-	Name    string
-	Rosters []Roster
-	Points  float32
+	Owner     string
+	MPORoster []Player
+	FPORoster []Player
+	Points    float32
 }
 
-func (team *Team) addRoster(roster Roster) {
-	team.Rosters = append(team.Rosters, roster)
-}
-
-func collectPlayerPoints(scraper *Scraper, teams []Team) {
-	tableSelector := "#official > tbody"
-	scraper.Colly.OnHTML(tableSelector, func(table *colly.HTMLElement) {
-		scrapePointsForRosteredPlayers(table, teams)
+func (team *Team) sortRostersByPoints() {
+	sort.Slice(team.MPORoster, func(i, j int) bool {
+		return team.MPORoster[i].Points > team.MPORoster[j].Points
 	})
-	visitURLs(scraper)
-}
 
-func scrapePointsForRosteredPlayers(table *colly.HTMLElement, teams []Team) {
-	rowSelector := "#official > tbody > tr"
-	table.ForEach(rowSelector, func(_ int, tableRow *colly.HTMLElement) {
-		nameColumnSelector := "#official > tbody > tr > td.whitespace-nowrap"
-		playerName := tableRow.ChildText(nameColumnSelector)
-		for teamIndex, team := range teams {
-			for rosterIndex, roster := range team.Rosters {
-				for playerIndex, player := range roster.Players {
-					rosterName := player.Name
-					if strings.Contains(playerName, rosterName) {
-						playerPoints := extractPoints(tableRow)
-						teams[teamIndex].Rosters[rosterIndex].Players[playerIndex].Points = playerPoints
-					}
-				}
-			}
-		}
+	sort.Slice(team.FPORoster, func(i, j int) bool {
+		return team.FPORoster[i].Points > team.FPORoster[j].Points
 	})
 }
 
-func visitURLs(scraper *Scraper) {
-	var wg sync.WaitGroup
-	wg.Add(len(scraper.URLs))
-	for _, url := range scraper.URLs {
-		go func(url string) {
-			defer wg.Done()
-			scraper.Colly.Visit(url)
-		}(url)
+func (team *Team) sumTopPlayersPoints() {
+	// Take top 4 players from mpo and top 2 players from fpo and sum their points
+	for player := range 4 {
+		team.Points += team.MPORoster[player].Points
 	}
-	wg.Wait()
-}
-
-func (team *Team) sumStarterPoints() {
-	for _, roster := range team.Rosters {
-		var pointsList []float32
-		for _, player := range roster.Players {
-			pointsList = append(pointsList, player.Points)
-		}
-		sort.Slice(pointsList, func(i, j int) bool {
-			return pointsList[i] > pointsList[j]
-		})
-		var sum float32
-		if roster.Division == "m" {
-			for _, points := range pointsList[:4] {
-				sum += points
-			}
-		} else {
-			for _, points := range pointsList[:2] {
-				sum += points
-			}
-		}
-		team.Points += sum
-	}
-}
-
-type Roster struct {
-	Division string
-	Players  []Player
-}
-
-func (roster *Roster) setRoster(division string, players []string) {
-	roster.setDivision(division)
-	roster.addPlayers(players)
-}
-
-func (roster *Roster) setDivision(division string) {
-	roster.Division = division
-}
-
-func (roster *Roster) addPlayers(playerList []string) {
-	for _, name := range playerList {
-		var player Player
-		player.Name = name
-		roster.Players = append(roster.Players, player)
+	for player := range 2 {
+		team.Points += team.FPORoster[player].Points
 	}
 }
 
 type Player struct {
 	Name   string
 	Points float32
+	Owner  string
 }
 
-type Scraper struct {
-	Colly *colly.Collector
-	URLs  []string
+func readJsonToLeagueTeams() LeagueTeams {
+	playerLists, err := os.ReadFile("teams.json")
+	if err != nil {
+		log.Fatal("Could not read file: ", err)
+	}
+	var teams LeagueTeams
+	err = json.Unmarshal(playerLists, &teams)
+	if err != nil {
+		log.Fatal("Error unmarshaling JSON: ", err)
+	}
+	return teams
 }
 
-func (scraper *Scraper) createColly() {
-	scraper.Colly = colly.NewCollector()
+func createAllPlayersLists(leagueTeams LeagueTeams) ([]Player, []Player) {
+	var allMPOPlayers []Player
+	var allFPOPlayers []Player
+	for owner, team := range leagueTeams {
+		allMPOPlayers = append(allMPOPlayers, addPlayersToAllPlayersList(team.MPO, owner)...)
+		allFPOPlayers = append(allFPOPlayers, addPlayersToAllPlayersList(team.FPO, owner)...)
+	}
+	return allMPOPlayers, allFPOPlayers
 }
 
-var mensURL string = "https://statmando.com/rankings/dgpt/mpo"
-var womensURL string = "https://statmando.com/rankings/dgpt/fpo"
+func addPlayersToAllPlayersList(roster []string, owner string) []Player {
+	var allPlayersList []Player
+	for _, name := range roster {
+		var player Player
+		player.Name = name
+		player.Owner = owner
+		allPlayersList = append(allPlayersList, player)
+	}
+	return allPlayersList
+}
 
 func extractPoints(tableRow *colly.HTMLElement) float32 {
 	playerPoints, err := strconv.ParseFloat(tableRow.ChildText("#official > tbody > tr > td:nth-child(4)"), 32)
@@ -137,54 +122,39 @@ func extractPoints(tableRow *colly.HTMLElement) float32 {
 	return float32(playerPoints)
 }
 
-func setAllTeams(teams FantasyTeams) []Team {
-	var teamList []Team
-	for teamName, players := range teams {
-		var team Team
-		team.Name = teamName
-
-		var rosterMPO Roster
-		rosterMPO.setRoster("m", players.MPO)
-		team.addRoster(rosterMPO)
-
-		var rosterFPO Roster
-		rosterFPO.setRoster("f", players.FPO)
-		team.addRoster(rosterFPO)
-
-		teamList = append(teamList, team)
-	}
-	return teamList
+func scrapeAllPlayerPoints(players []Player, url string, scraper *colly.Collector) {
+	tableSelector := "#official > tbody"
+	scraper.OnHTML(tableSelector, func(table *colly.HTMLElement) {
+		rowSelector := "#official > tbody > tr"
+		table.ForEach(rowSelector, func(_ int, tableRow *colly.HTMLElement) {
+			nameColumnSelector := "#official > tbody > tr > td.whitespace-nowrap"
+			playerName := tableRow.ChildText(nameColumnSelector)
+			for i, player := range players {
+				if strings.Contains(playerName, player.Name) {
+					players[i].Points = extractPoints(tableRow)
+				}
+			}
+		})
+	})
+	scraper.Visit(url)
 }
 
-func orderByPoints(teams []Team) {
+func addPlayersToTeams(teams []Team, players []Player, division string) {
+	for i, player := range players {
+		for j, team := range teams {
+			if team.Owner == player.Owner {
+				if division == "mpo" {
+					teams[j].MPORoster = append(team.MPORoster, players[i])
+				} else {
+					teams[j].FPORoster = append(team.FPORoster, players[i])
+				}
+			}
+		}
+	}
+}
+
+func orderTeamsByPoints(teams []Team) {
 	sort.Slice(teams, func(i, j int) bool {
 		return teams[i].Points > teams[j].Points
 	})
-}
-
-func main() {
-	playerLists, err := os.ReadFile("teams.json")
-	if err != nil {
-		log.Fatal("Could not read file: ", err)
-	}
-	var teams FantasyTeams
-	err = json.Unmarshal(playerLists, &teams)
-	if err != nil {
-		log.Fatal("Error unmarshaling JSON: ", err)
-	}
-
-	var scraper Scraper
-	scraper.createColly()
-	scraper.URLs = append(scraper.URLs, mensURL)
-	scraper.URLs = append(scraper.URLs, womensURL)
-
-	league := setAllTeams(teams)
-	collectPlayerPoints(&scraper, league)
-	for i := range league {
-		league[i].sumStarterPoints()
-	}
-	orderByPoints(league)
-	for i := range league {
-		fmt.Printf("%v. %v: %v\n", i+1, league[i].Name, league[i].Points)
-	}
 }
