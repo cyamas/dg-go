@@ -8,20 +8,25 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gocolly/colly"
 )
 
-var mpoURL string = "https://statmando.com/rankings/dgpt/mpo"
-var fpoURL string = "https://statmando.com/rankings/dgpt/fpo"
+const MpoURL string = "https://statmando.com/rankings/dgpt/mpo"
+const FpoURL string = "https://statmando.com/rankings/dgpt/fpo"
 
 func main() {
+	startTime := time.Now()
 	teamsFromFile := readFileToLeagueTeams("teams.json")
 	allMPOPlayers, allFPOPlayers := collectAllPlayersByDivision(teamsFromFile)
 
-	scraper := colly.NewCollector()
-	scrapeAllPlayerPoints(allMPOPlayers, mpoURL, scraper)
-	scrapeAllPlayerPoints(allFPOPlayers, fpoURL, scraper)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go scrapeAllPlayerPoints(allMPOPlayers, MpoURL, &wg)
+	go scrapeAllPlayerPoints(allFPOPlayers, FpoURL, &wg)
+	wg.Wait()
 
 	league := createLeague(teamsFromFile)
 	distroPlayersToTeams(league, allMPOPlayers, "mpo")
@@ -33,6 +38,9 @@ func main() {
 	}
 	orderTeamsByPoints(league)
 	displayStandings(league)
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+	fmt.Println(duration)
 }
 
 type LeagueTeams map[string]struct {
@@ -115,7 +123,9 @@ func extractPoints(tableRow *colly.HTMLElement) float32 {
 	return float32(playerPoints)
 }
 
-func scrapeAllPlayerPoints(players []Player, url string, scraper *colly.Collector) {
+func scrapeAllPlayerPoints(players []Player, url string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	var scraper *colly.Collector = colly.NewCollector()
 	tableSelector := "#official > tbody"
 	scraper.OnHTML(tableSelector, func(table *colly.HTMLElement) {
 		rowSelector := "#official > tbody > tr"
@@ -164,6 +174,6 @@ func orderTeamsByPoints(teams []Team) {
 
 func displayStandings(teams []Team) {
 	for i, team := range teams {
-		fmt.Printf("%v. %v: %v", i+1, team.Owner, team.Points)
+		fmt.Printf("%v. %v: %v\n", i+1, team.Owner, team.Points)
 	}
 }
