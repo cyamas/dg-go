@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gocolly/colly"
 )
@@ -18,9 +17,8 @@ const MpoURL string = "https://statmando.com/rankings/dgpt/mpo"
 const FpoURL string = "https://statmando.com/rankings/dgpt/fpo"
 
 func main() {
-	startTime := time.Now()
-	teamsFromFile := readFileToLeagueTeams("teams.json")
-	allMPOPlayers, allFPOPlayers := collectAllPlayersByDivision(teamsFromFile)
+	teamsFromFile := readAndUnmarshalFile("teams.json")
+	league, allMPOPlayers, allFPOPlayers := splitTeamsAndPlayers(teamsFromFile)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -28,7 +26,6 @@ func main() {
 	go scrapeAllPlayerPoints(allFPOPlayers, FpoURL, &wg)
 	wg.Wait()
 
-	league := createLeague(teamsFromFile)
 	distroPlayersToTeams(league, allMPOPlayers, "mpo")
 	distroPlayersToTeams(league, allFPOPlayers, "fpo")
 
@@ -38,12 +35,9 @@ func main() {
 	}
 	orderTeamsByPoints(league)
 	displayStandings(league)
-	endTime := time.Now()
-	duration := endTime.Sub(startTime)
-	fmt.Println(duration)
 }
 
-type LeagueTeams map[string]struct {
+type UnmarshaledTeamsData map[string]struct {
 	MPO []string `json:"mpo"`
 	FPO []string `json:"fpo"`
 }
@@ -81,12 +75,12 @@ type Player struct {
 	Owner  string
 }
 
-func readFileToLeagueTeams(file string) LeagueTeams {
+func readAndUnmarshalFile(file string) UnmarshaledTeamsData {
 	playerLists, err := os.ReadFile(file)
 	if err != nil {
 		log.Fatal("Could not read file: ", err)
 	}
-	var teams LeagueTeams
+	var teams UnmarshaledTeamsData
 	err = json.Unmarshal(playerLists, &teams)
 	if err != nil {
 		log.Fatal("Error unmarshaling JSON: ", err)
@@ -94,14 +88,19 @@ func readFileToLeagueTeams(file string) LeagueTeams {
 	return teams
 }
 
-func collectAllPlayersByDivision(leagueTeams LeagueTeams) ([]Player, []Player) {
+func splitTeamsAndPlayers(unmarshaledTeams UnmarshaledTeamsData) ([]Team, []Player, []Player) {
+	var league []Team
 	var allMPOPlayers []Player
 	var allFPOPlayers []Player
-	for owner, team := range leagueTeams {
-		allMPOPlayers = append(allMPOPlayers, addPlayersToAllPlayersList(team.MPO, owner)...)
-		allFPOPlayers = append(allFPOPlayers, addPlayersToAllPlayersList(team.FPO, owner)...)
+	for owner, rosters := range unmarshaledTeams {
+		var team Team
+		team.Owner = owner
+		league = append(league, team)
+
+		allMPOPlayers = append(allMPOPlayers, addPlayersToAllPlayersList(rosters.MPO, owner)...)
+		allFPOPlayers = append(allFPOPlayers, addPlayersToAllPlayersList(rosters.FPO, owner)...)
 	}
-	return allMPOPlayers, allFPOPlayers
+	return league, allMPOPlayers, allFPOPlayers
 }
 
 func addPlayersToAllPlayersList(roster []string, owner string) []Player {
@@ -127,7 +126,8 @@ func scrapeAllPlayerPoints(players []Player, url string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	var scraper *colly.Collector = colly.NewCollector()
 	tableSelector := "#official > tbody"
-	scraper.OnHTML(tableSelector, func(table *colly.HTMLElement) {
+
+	getPointsFromTable := func(table *colly.HTMLElement) {
 		rowSelector := "#official > tbody > tr"
 		table.ForEach(rowSelector, func(_ int, tableRow *colly.HTMLElement) {
 			nameColumnSelector := "#official > tbody > tr > td.whitespace-nowrap"
@@ -138,18 +138,10 @@ func scrapeAllPlayerPoints(players []Player, url string, wg *sync.WaitGroup) {
 				}
 			}
 		})
-	})
-	scraper.Visit(url)
-}
-
-func createLeague(leagueTeams LeagueTeams) []Team {
-	var league []Team
-	for teamOwner := range leagueTeams {
-		var team Team
-		team.Owner = teamOwner
-		league = append(league, team)
 	}
-	return league
+
+	scraper.OnHTML(tableSelector, getPointsFromTable)
+	scraper.Visit(url)
 }
 
 func distroPlayersToTeams(teams []Team, players []Player, division string) {
