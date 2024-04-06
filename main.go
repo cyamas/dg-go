@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gocolly/colly"
 )
@@ -18,16 +17,11 @@ const FpoURL string = "https://statmando.com/rankings/dgpt/fpo"
 
 func main() {
 	teamsFromFile := readAndUnmarshalFile("teams.json")
-	league, allMPOPlayers, allFPOPlayers := splitTeamsAndPlayers(teamsFromFile)
+	league, allMPOPlayers, allFPOPlayers := createLeagueAndAllPlayersSets(teamsFromFile)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go scrapeAllPlayerPoints(allMPOPlayers, MpoURL, &wg)
-	go scrapeAllPlayerPoints(allFPOPlayers, FpoURL, &wg)
-	wg.Wait()
-
-	distroPlayersToTeams(league, allMPOPlayers, "mpo")
-	distroPlayersToTeams(league, allFPOPlayers, "fpo")
+	mpoPoints := scrapeAllPlayerPoints(allMPOPlayers, MpoURL)
+	fpoPoints := scrapeAllPlayerPoints(allFPOPlayers, FpoURL)
+	setPlayerPoints(&league, mpoPoints, fpoPoints)
 
 	for i := range league {
 		league[i].sortRostersByPoints()
@@ -88,30 +82,39 @@ func readAndUnmarshalFile(file string) UnmarshaledTeamsData {
 	return teams
 }
 
-func splitTeamsAndPlayers(unmarshaledTeams UnmarshaledTeamsData) ([]Team, []Player, []Player) {
+func createLeagueAndAllPlayersSets(unmarshaledTeams UnmarshaledTeamsData) ([]Team, map[string]float32, map[string]float32) {
 	var league []Team
-	var allMPOPlayers []Player
-	var allFPOPlayers []Player
+	allMPOPlayers := make(map[string]float32)
+	allFPOPlayers := make(map[string]float32)
 	for owner, rosters := range unmarshaledTeams {
 		var team Team
+		team.MPORoster = createPlayerRoster(rosters.MPO, owner)
+		team.FPORoster = createPlayerRoster(rosters.FPO, owner)
 		team.Owner = owner
 		league = append(league, team)
 
-		allMPOPlayers = append(allMPOPlayers, addPlayersToAllPlayersList(rosters.MPO, owner)...)
-		allFPOPlayers = append(allFPOPlayers, addPlayersToAllPlayersList(rosters.FPO, owner)...)
+		allMPOPlayers = addPlayersToSet(allMPOPlayers, rosters.MPO)
+		allFPOPlayers = addPlayersToSet(allFPOPlayers, rosters.FPO)
 	}
 	return league, allMPOPlayers, allFPOPlayers
 }
 
-func addPlayersToAllPlayersList(roster []string, owner string) []Player {
-	var allPlayersList []Player
+func createPlayerRoster(roster []string, owner string) []Player {
+	var players []Player
 	for _, name := range roster {
 		var player Player
 		player.Name = name
 		player.Owner = owner
-		allPlayersList = append(allPlayersList, player)
+		players = append(players, player)
 	}
-	return allPlayersList
+	return players
+}
+
+func addPlayersToSet(playerSet map[string]float32, roster []string) map[string]float32 {
+	for _, name := range roster {
+		playerSet[name] = 0
+	}
+	return playerSet
 }
 
 func extractPoints(tableRow *colly.HTMLElement) float32 {
@@ -122,8 +125,7 @@ func extractPoints(tableRow *colly.HTMLElement) float32 {
 	return float32(playerPoints)
 }
 
-func scrapeAllPlayerPoints(players []Player, url string, wg *sync.WaitGroup) {
-	defer wg.Done()
+func scrapeAllPlayerPoints(players map[string]float32, url string) map[string]float32 {
 	var scraper *colly.Collector = colly.NewCollector()
 	tableSelector := "#official > tbody"
 
@@ -132,28 +134,30 @@ func scrapeAllPlayerPoints(players []Player, url string, wg *sync.WaitGroup) {
 		table.ForEach(rowSelector, func(_ int, tableRow *colly.HTMLElement) {
 			nameColumnSelector := "#official > tbody > tr > td.whitespace-nowrap"
 			playerName := tableRow.ChildText(nameColumnSelector)
-			for i, player := range players {
-				if strings.Contains(playerName, player.Name) {
-					players[i].Points = extractPoints(tableRow)
-				}
+			// DGPT championship qualifiers have * appended to their name in table. Remove *
+			if strings.Contains(playerName, "*") {
+				playerName = playerName[:len(playerName)-1]
+			}
+			_, ok := players[playerName]
+			if ok {
+				players[playerName] = extractPoints(tableRow)
 			}
 		})
 	}
 
 	scraper.OnHTML(tableSelector, getPointsFromTable)
 	scraper.Visit(url)
+	return players
 }
 
-func distroPlayersToTeams(teams []Team, players []Player, division string) {
-	for i, player := range players {
-		for j, team := range teams {
-			if team.Owner == player.Owner {
-				if division == "mpo" {
-					teams[j].MPORoster = append(team.MPORoster, players[i])
-				} else {
-					teams[j].FPORoster = append(team.FPORoster, players[i])
-				}
-			}
+func setPlayerPoints(league *[]Team, mpoPoints, fpoPoints map[string]float32) {
+	teams := *league
+	for i, team := range teams {
+		for m, player := range team.MPORoster {
+			teams[i].MPORoster[m].Points = mpoPoints[player.Name]
+		}
+		for f, player := range team.FPORoster {
+			teams[i].FPORoster[f].Points = fpoPoints[player.Name]
 		}
 	}
 }
