@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/gocolly/colly"
+	"github.com/PuerkitoBio/goquery"
 )
 
 const MpoURL string = "https://statmando.com/rankings/dgpt/mpo"
@@ -19,8 +21,7 @@ func main() {
 	teamsFromFile := readAndUnmarshalFile("teams.json")
 	league, allMPOPlayers, allFPOPlayers := createLeagueAndAllPlayersSets(teamsFromFile)
 
-	mpoPoints := scrapeAllPlayerPoints(allMPOPlayers, MpoURL)
-	fpoPoints := scrapeAllPlayerPoints(allFPOPlayers, FpoURL)
+	mpoPoints, fpoPoints := getAllPlayerPoints(MpoURL, FpoURL, allMPOPlayers, allFPOPlayers)
 	setPlayerPoints(&league, mpoPoints, fpoPoints)
 
 	for i := range league {
@@ -35,6 +36,8 @@ type UnmarshaledTeamsData map[string]struct {
 	MPO []string `json:"mpo"`
 	FPO []string `json:"fpo"`
 }
+
+type PlayersSet map[string]float32
 
 type Team struct {
 	Owner     string
@@ -82,10 +85,10 @@ func readAndUnmarshalFile(file string) UnmarshaledTeamsData {
 	return teams
 }
 
-func createLeagueAndAllPlayersSets(unmarshaledTeams UnmarshaledTeamsData) ([]Team, map[string]float32, map[string]float32) {
+func createLeagueAndAllPlayersSets(unmarshaledTeams UnmarshaledTeamsData) ([]Team, PlayersSet, PlayersSet) {
 	var league []Team
-	allMPOPlayers := make(map[string]float32)
-	allFPOPlayers := make(map[string]float32)
+	allMPOPlayers := make(PlayersSet)
+	allFPOPlayers := make(PlayersSet)
 	for owner, rosters := range unmarshaledTeams {
 		var team Team
 		team.MPORoster = createPlayerRoster(rosters.MPO, owner)
@@ -110,47 +113,80 @@ func createPlayerRoster(roster []string, owner string) []Player {
 	return players
 }
 
-func addPlayersToSet(playerSet map[string]float32, roster []string) map[string]float32 {
+func addPlayersToSet(playerSet PlayersSet, roster []string) PlayersSet {
 	for _, name := range roster {
 		playerSet[name] = 0
 	}
 	return playerSet
 }
 
-func extractPoints(tableRow *colly.HTMLElement) float32 {
-	playerPoints, err := strconv.ParseFloat(tableRow.ChildText("#official > tbody > tr > td:nth-child(4)"), 32)
+func getAllPlayerPoints(mpoURL string, fpoURL string, mpoPlayers, fpoPlayers PlayersSet) (PlayersSet, PlayersSet) {
+	mpoChannel := make(chan PlayersSet)
+	fpoChannel := make(chan PlayersSet)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go scrapePlayerPointsByDivision(mpoPlayers, mpoURL, mpoChannel, &wg)
+	go scrapePlayerPointsByDivision(fpoPlayers, fpoURL, fpoChannel, &wg)
+	mpoPoints := <-mpoChannel
+	fpoPoints := <-fpoChannel
+	close(mpoChannel)
+	close(fpoChannel)
+	wg.Wait()
+
+	return mpoPoints, fpoPoints
+}
+
+func scrapePlayerPointsByDivision(players PlayersSet, url string, ch chan<- PlayersSet, wg *sync.WaitGroup) {
+	defer wg.Done()
+	doc := getHTMLDoc(url)
+
+	tableRowSelector := "#official > tbody > tr"
+	nameSelector := "#official > tbody > tr > td.whitespace-nowrap"
+	pointsSelector := "#official > tbody > tr > td:nth-child(4)"
+
+	getPlayerPoints := func(_ int, selection *goquery.Selection) {
+		rawName := selection.Find(nameSelector).Text()
+		name := strings.TrimSpace(rawName)
+		if strings.Contains(name, "*") {
+			name = name[:len(name)-1]
+		}
+		_, ok := players[name]
+		if ok {
+			players[name] = extractPoints(selection, pointsSelector)
+		}
+	}
+	doc.Find(tableRowSelector).Each(getPlayerPoints)
+	ch <- players
+}
+
+func getHTMLDoc(url string) *goquery.Document {
+	pageRequest, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Error: %v", err)
+	}
+	defer pageRequest.Body.Close()
+	if pageRequest.StatusCode != 200 {
+		log.Fatalf("status code error: %d %s", pageRequest.StatusCode, pageRequest.Status)
+	}
+	doc, err := goquery.NewDocumentFromReader(pageRequest.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return doc
+}
+
+func extractPoints(selection *goquery.Selection, pointsSelector string) float32 {
+	rawPointsStr := selection.Find(pointsSelector).Text()
+	pointsStr := strings.TrimSpace(rawPointsStr)
+	points, err := strconv.ParseFloat(pointsStr, 32)
 	if err != nil {
 		log.Fatal("Error converting string to Float: ", err)
 	}
-	return float32(playerPoints)
+	return float32(points)
 }
 
-func scrapeAllPlayerPoints(players map[string]float32, url string) map[string]float32 {
-	var scraper *colly.Collector = colly.NewCollector()
-	tableSelector := "#official > tbody"
-
-	getPointsFromTable := func(table *colly.HTMLElement) {
-		rowSelector := "#official > tbody > tr"
-		table.ForEach(rowSelector, func(_ int, tableRow *colly.HTMLElement) {
-			nameColumnSelector := "#official > tbody > tr > td.whitespace-nowrap"
-			playerName := tableRow.ChildText(nameColumnSelector)
-			// DGPT championship qualifiers have * appended to their name in table. Remove *
-			if strings.Contains(playerName, "*") {
-				playerName = playerName[:len(playerName)-1]
-			}
-			_, ok := players[playerName]
-			if ok {
-				players[playerName] = extractPoints(tableRow)
-			}
-		})
-	}
-
-	scraper.OnHTML(tableSelector, getPointsFromTable)
-	scraper.Visit(url)
-	return players
-}
-
-func setPlayerPoints(league *[]Team, mpoPoints, fpoPoints map[string]float32) {
+func setPlayerPoints(league *[]Team, mpoPoints, fpoPoints PlayersSet) {
 	teams := *league
 	for i, team := range teams {
 		for m, player := range team.MPORoster {
