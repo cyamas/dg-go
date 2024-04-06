@@ -1,1 +1,1 @@
-A simple web scraper script written in Go using the colly library that extracts and sums the tour points for all members of a fantasy disc golf league and prints the current standings.
+A simple web scraper script written in Go using the goquery library that extracts and sums the tour points for all members of a fantasy disc golf league and prints the current standings.
