@@ -120,27 +120,21 @@ func addPlayersToSet(playerSet PlayersSet, roster []string) PlayersSet {
 	return playerSet
 }
 
-func getAllPlayerPoints(mpoURL string, fpoURL string, mpoPlayers, fpoPlayers PlayersSet) (PlayersSet, PlayersSet) {
-	mpoChannel := make(chan PlayersSet)
-	fpoChannel := make(chan PlayersSet)
+func getAllPlayerPoints(mpoURL string, fpoURL string, mpoSet, fpoSet PlayersSet) (PlayersSet, PlayersSet) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-
-	go scrapePlayerPointsByDivision(mpoPlayers, mpoURL, mpoChannel, &wg)
-	go scrapePlayerPointsByDivision(fpoPlayers, fpoURL, fpoChannel, &wg)
-	mpoPoints := <-mpoChannel
-	fpoPoints := <-fpoChannel
-	close(mpoChannel)
-	close(fpoChannel)
+	go scrapePlayerPointsByDivision(&mpoSet, mpoURL, &wg)
+	go scrapePlayerPointsByDivision(&fpoSet, fpoURL, &wg)
 	wg.Wait()
 
-	return mpoPoints, fpoPoints
+	return mpoSet, fpoSet
 }
 
-func scrapePlayerPointsByDivision(players PlayersSet, url string, ch chan<- PlayersSet, wg *sync.WaitGroup) {
+func scrapePlayerPointsByDivision(players *PlayersSet, url string, wg *sync.WaitGroup) {
 	defer wg.Done()
-	doc := getHTMLDoc(url)
+	playersSet := *players
 
+	doc := getHTMLDoc(url)
 	tableRowSelector := "#official > tbody > tr"
 	nameSelector := "#official > tbody > tr > td.whitespace-nowrap"
 	pointsSelector := "#official > tbody > tr > td:nth-child(4)"
@@ -151,13 +145,12 @@ func scrapePlayerPointsByDivision(players PlayersSet, url string, ch chan<- Play
 		if strings.Contains(name, "*") {
 			name = name[:len(name)-1]
 		}
-		_, ok := players[name]
+		_, ok := playersSet[name]
 		if ok {
-			players[name] = extractPoints(selection, pointsSelector)
+			playersSet[name] = extractPoints(selection, pointsSelector)
 		}
 	}
 	doc.Find(tableRowSelector).Each(getPlayerPoints)
-	ch <- players
 }
 
 func getHTMLDoc(url string) *goquery.Document {
